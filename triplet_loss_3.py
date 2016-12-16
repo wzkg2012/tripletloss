@@ -4,7 +4,7 @@ import sys, random, os
 import mxnet as mx
 import numpy as np
 from operator import itemgetter
-import pdb
+from inception import  get_inception
 
 class Batch(object):
     def __init__(self, data_names, data, label_names, label):
@@ -31,7 +31,6 @@ class DataIter(mx.io.DataIter):
         self.batch_size = batch_size
         self.provide_data = [('same', (batch_size, 3, 32, 32)), \
                              ('diff', (batch_size, 3, 32, 32))]
-                             
         self.provide_label = [('anchor', (batch_size, 3, 32, 32))]
         
     def generate_batch(self, n):
@@ -56,9 +55,10 @@ class DataIter(mx.io.DataIter):
             batch_anchor = [x[0] for x in batch]
             batch_same = [x[1] for x in batch]
             batch_diff = [x[2] for x in batch]
-            #batch_one = np.ones(self.batch_size)
+            batch_one = np.ones(self.batch_size)
                         
-            data_all = [mx.nd.array(batch_same), mx.nd.array(batch_diff)]
+            data_all = [mx.nd.array(batch_same), mx.nd.array(batch_diff), \
+                        mx.nd.array(batch_one)]
             label_all = [mx.nd.array(batch_anchor)]
             data_names = ['same', 'diff']
             label_names = ['anchor']
@@ -68,92 +68,40 @@ class DataIter(mx.io.DataIter):
 
     def reset(self):
         pass
-def get_tripletloss(data,hash_len=100,scale=1,alpha=0):
-    cdata = mx.symbol.FullyConnected(data=data, num_hidden=hash_len, name='fc_1')
-    sigmoi  = mx.symbol.Activation(data=cdata,name='sigmoid',act_type='sigmoid')
-    sigmoid = 2*sigmoi - 1
-    quantLoss = mx.symbol.sign(data=sigmoid, name='sign') - sigmoid
+
+
+
+
+def get_net(batch_size=128,hash_len=100,scale=100,alpha=5):
+    same = mx.sym.Variable('same')
+    diff = mx.sym.Variable('diff')
+    anchor = mx.sym.Variable('anchor')
+    concat = mx.symbol.Concat(*[same, diff, anchor], dim=0, name='concat')
+    output = get_inception(concat, hash_len)
+    quantLoss = mx.symbol.sign(data=output, name='sign') - output
     quantLoss = mx.symbol.square(data=quantLoss,name='square')
     quantLoss = mx.symbol.sum(data=quantLoss,axis = 1,name='qsum')
     #quantLoss =mx.symbol.sqrt(data = quantLoss,name = 'quantLoss_')
     quantLoss = quantLoss * scale
-    quantLoss = mx.symbol.MakeLoss(data = quantLoss,name = 'quantLoss')
-
+    quantLoss = mx.symbol.MakeLoss(data = quantLoss,name = 'quantLoss')    
     #triplet loss
-    sigmoid_fs =  mx.symbol.slice_axis(sigmoi, axis=0, begin=0, end=batch_size,name='sigmoid_fs')
-    sigmoid_fd =  mx.symbol.slice_axis(sigmoi, axis=0, begin=batch_size, end=2*batch_size,name='sigmoid_fd')
-    sigmoid_fa =  mx.symbol.slice_axis(sigmoi, axis=0, begin=2*batch_size, end=3*batch_size,name='sigmoid_fa')
+    fc1_fs =  mx.symbol.slice_axis(output, axis=0, begin=0, end=batch_size,name='fc1_fs')
+    fc1_fd =  mx.symbol.slice_axis(output, axis=0, begin=batch_size, end=2*batch_size,name='fc1_fd')
+    fc1_fa =  mx.symbol.slice_axis(output, axis=0, begin=2*batch_size, end=3*batch_size,name='fc1_fa')
     '''
     theta_as = mx.symbol.dot(lhs=sigmoid_fa.transpose(0,1),rhs=sigmoid_fs)
     theta_ad = mx.symbol.dot(lhs=sigmoid_fa.transpose(0,1),rhs=sigmoid_fd)
    '''
 
-    theta_as = sigmoid_fa* sigmoid_fs
-    theta_ad = sigmoid_fa*sigmoid_fd
+    theta_as = fc1_fa*fc1_fs
+    theta_ad = fc1_fa*fc1_fd
 
     tripletLoss = -(theta_as-theta_ad-alpha-mx.symbol.log(1+mx.symbol.exp(theta_as-theta_ad-alpha)))
     tripletLoss = mx.symbol.sum(data=tripletLoss,axis=1)
     tripletLoss = mx.symbol.MakeLoss(data = tripletLoss,name="tripelt_hash_loss")
-    totalLoss = mx.sym.Group([quantLoss,tripletLoss])
+    totalLoss = mx.sym.Group([tripletLoss,quantLoss])
     return totalLoss
 
-
-def get_conv(data, conv_weight, conv_bias, fc_weight, fc_bias):
-    cdata = data
-    ks = [5,3,3]
-    for i in range(3):
-        cdata = mx.sym.Convolution(data=cdata, kernel=(ks[i],ks[i]), num_filter=32,
-                                   weight = conv_weight[i], bias = conv_bias[i],
-                                   name = 'conv' + str(i))
-        cdata = mx.sym.Pooling(data=cdata, pool_type="avg", kernel=(2,2), stride=(1, 1))
-        cdata = mx.sym.Activation(data=cdata, act_type="relu")
-
-    cdata = mx.sym.Flatten(data = cdata)
-    
-    cdata = mx.sym.FullyConnected(data = cdata, num_hidden = 1024,
-                                  weight = fc_weight, bias = fc_bias, name='fc')
- 
-    return cdata
-
-
-
-def get_net(batch_size=128,hash_len=16):
-    same = mx.sym.Variable('same')
-    diff = mx.sym.Variable('diff')
-    anchor = mx.sym.Variable('anchor')
-    '''
-    one = mx.sym.Variable('one')
-    one = mx.sym.Reshape(data = one, shape = (-1, 1))
-    '''
-    conv_weight = []
-    conv_bias = []
-    concat = mx.symbol.Concat(*[same, diff, anchor], dim=0, name='concat')
-    for i in range(3):
-        conv_weight.append(mx.sym.Variable('conv' + str(i) + '_weight'))
-        conv_bias.append(mx.sym.Variable('conv' + str(i) + '_bias'))
-    fc_weight = mx.sym.Variable('fc_weight')
-    fc_bias = mx.sym.Variable('fc_bias')
-    
-    output = get_conv(concat, conv_weight, conv_bias, fc_weight, fc_bias)
-    output =  get_tripletloss(output,hash_len=hash_len)
-    '''
-    fs = get_conv(same, conv_weight, conv_bias, fc_weight, fc_bias)
-    fd = get_conv(diff, conv_weight, conv_bias, fc_weight, fc_bias)
-    
-    fs = mx.symbol.slice_axis(output, axis=0, begin=0, end=batch_size)
-    fd = mx.symbol.slice_axis(output, axis=0, begin=batch_size, end=2*batch_size)
-    fa = mx.symbol.slice_axis(output, axis=0, begin=2*batch_size, end=3*batch_size)
-    fs = fa - fs
-    fd = fa - fd
-    fs = fs * fs
-    fd = fd * fd
-    fs = mx.sym.sum(fs, axis = 1, keepdims = 1)
-    fd = mx.sym.sum(fd, axis = 1, keepdims = 1)
-    loss = fd - fs
-    loss = one - loss
-    loss = mx.sym.Activation(data = loss, act_type = 'relu')
-    '''
-    return output
 
 class Auc(mx.metric.EvalMetric):
     def __init__(self):
@@ -166,20 +114,16 @@ class Auc(mx.metric.EvalMetric):
 
 if __name__ == '__main__':
     batch_size = 128
-    hashing_len = 16
+    hashing_len = 1024
     network = get_net(batch_size,hashing_len)
-    devs = [mx.gpu(2)]
-    pdb.set_trace()
-    #pre_trained = mx.model.FeedForward.load('',100)
-    #internals = network.symbol.get_internals()
-    #feature_sumbol = internals['sigmoid_as_output']
+    devs = [mx.gpu(3)]
     model = mx.model.FeedForward(ctx = devs,
                                  symbol = network,
-                                 num_epoch = 50,
-                                 learning_rate = 1e-5,
+                                 num_epoch = 100,
+                                 learning_rate = 1e-6,
                                  wd = 0.00001,
-                                 initializer = mx.init.Xavier(factor_type="in", magnitude=2.34),
-                                 momentum = 0.0)
+                                 initializer = mx.init.Normal(sigma=0.1),
+                                 momentum = 0.9)
     names = []
     root = sys.argv[1]
     for fn in os.listdir(root):
