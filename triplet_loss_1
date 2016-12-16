@@ -59,7 +59,7 @@ class DataIter(mx.io.DataIter):
                         
             data_all = [mx.nd.array(batch_same), mx.nd.array(batch_diff), \
                         mx.nd.array(batch_one)]
-            label_all = [mx.nd.array(batch_a 'one'nchor)]
+            label_all = [mx.nd.array(batch_anchor)]
             data_names = ['same', 'diff', 'one'] 
             label_names = ['anchor']
             
