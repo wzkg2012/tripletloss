@@ -29,7 +29,8 @@ class DataIter(mx.io.DataIter):
         print 'load data ok'
         self.batch_size = batch_size
         self.provide_data = [('same', (batch_size, 3, 32, 32)), \
-                             ('diff', (batch_size, 3, 32, 32))]
+                             ('diff', (batch_size, 3, 32, 32)),
+                             ('one', (batch_size, ))]
         self.provide_label = [('anchor', (batch_size, 3, 32, 32))]
         
     def generate_batch(self, n):
@@ -58,8 +59,8 @@ class DataIter(mx.io.DataIter):
                         
             data_all = [mx.nd.array(batch_same), mx.nd.array(batch_diff), \
                         mx.nd.array(batch_one)]
-            label_all = [mx.nd.array(batch_anchor)]
-            data_names = ['same', 'diff']
+            label_all = [mx.nd.array(batch_a 'one'nchor)]
+            data_names = ['same', 'diff', 'one'] 
             label_names = ['anchor']
             
             data_batch = Batch(data_names, data_all, label_names, label_all)
@@ -76,6 +77,8 @@ def get_net(batch_size=128,hash_len=100,scale=100,alpha=5):
     diff = mx.sym.Variable('diff')
     anchor = mx.sym.Variable('anchor')
     concat = mx.symbol.Concat(*[same, diff, anchor], dim=0, name='concat')
+    one = mx.sym.Variable('one')
+    one = mx.sym.Reshape(data = one, shape = (-1, 1))
     
     output = get_inception(concat, hash_len)
     #triplet loss
