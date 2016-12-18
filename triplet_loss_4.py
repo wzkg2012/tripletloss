@@ -55,10 +55,8 @@ class DataIter(mx.io.DataIter):
             batch_anchor = [x[0] for x in batch]
             batch_same = [x[1] for x in batch]
             batch_diff = [x[2] for x in batch]
-            batch_one = np.ones(self.batch_size)
                         
-            data_all = [mx.nd.array(batch_same), mx.nd.array(batch_diff), \
-                        mx.nd.array(batch_one)]
+            data_all = [mx.nd.array(batch_same), mx.nd.array(batch_diff)]
             label_all = [mx.nd.array(batch_anchor)]
             data_names = ['same', 'diff']
             label_names = ['anchor']
