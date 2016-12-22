@@ -3,6 +3,7 @@
 import sys, random, os
 import mxnet as mx
 import numpy as np
+import pdb
 from operator import itemgetter
 from inception import  get_inception
 
@@ -31,8 +32,9 @@ class DataIter(mx.io.DataIter):
         self.batch_size = batch_size
         self.provide_data = [('same', (batch_size, 3, 32, 32)), \
                              ('diff', (batch_size, 3, 32, 32)),\
-			     ('one', (batch_size, ))]
-        self.provide_label = [('anchor', (batch_size, 3, 32, 32))]
+                             ('anchor', (batch_size, 3, 32, 32))
+			     ]
+        self.provide_label = [('one', (batch_size, ))]
         
     def generate_batch(self, n):
         n1, n2 = random.sample(range(len(self.cache)), 2)
@@ -58,10 +60,10 @@ class DataIter(mx.io.DataIter):
             batch_diff = [x[2] for x in batch]
             batch_one = np.ones(self.batch_size)
             
-            data_all = [mx.nd.array(batch_same), mx.nd.array(batch_diff),mx.nd.array(batch_one)]
-            label_all = [mx.nd.array(batch_anchor)]
-            data_names = ['same', 'diff','one']
-            label_names = ['anchor']
+            data_all = [mx.nd.array(batch_same), mx.nd.array(batch_diff),mx.nd.array(batch_anchor)]
+            label_all = [mx.nd.array(batch_one)]
+            data_names = ['same', 'diff','anchor']
+            label_names = ['one']
             
             data_batch = Batch(data_names, data_all, label_names, label_all)
             yield data_batch
@@ -72,7 +74,7 @@ class DataIter(mx.io.DataIter):
 
 
 
-def get_net(batch_size=128,hash_len=100,scale=1,alpha=2):
+def get_net(batch_size=128,hash_len=100,scale=0.1,alpha=1):
     same = mx.sym.Variable('same')
     diff = mx.sym.Variable('diff')
     anchor = mx.sym.Variable('anchor')
@@ -91,19 +93,23 @@ def get_net(batch_size=128,hash_len=100,scale=1,alpha=2):
    '''
     quantLoss = mx.symbol.sign(data=output, name='sign') - output
     quantLoss = mx.symbol.square(data=quantLoss,name='square')
-    quantLoss = mx.symbol.sum(data=quantLoss,axis = 1,name='qsum')
+    quantLoss1 = mx.symbol.sum(data=quantLoss,axis = 1,name='qsum')
     #quantLoss =mx.symbol.sqrt(data = quantLoss,name = 'quantLoss_')
-    quantLoss = quantLoss * scale
+    quantLoss = quantLoss1 * scale
     quantLoss = mx.symbol.MakeLoss(data = quantLoss,name = 'quantLoss')
 
     theta_as = 0.5*fc1_fa*fc1_fs
     theta_ad = 0.5*fc1_fa*fc1_fd
     theta_as = mx.sym.sum(data=theta_as,axis=(1),keepdims=1)  
     theta_ad = mx.sym.sum(data=theta_ad,axis=(1),keepdims=1)
-  
+    tripletLoss1 = theta_ad-theta_as-one
+    tripletLoss1 = mx.symbol.MakeLoss(data=tripletLoss1, name="tripelt_hash_loss")
+
+    ''''
     tripletLoss = -(theta_as-theta_ad-one-mx.symbol.log(1+mx.symbol.exp(theta_as-theta_ad-one)))
     tripletLoss = mx.symbol.MakeLoss(data = tripletLoss,name="tripelt_hash_loss")
-    totalLoss = mx.sym.Group([tripletLoss,quantLoss])
+    '''
+    totalLoss = mx.sym.Group([tripletLoss1])
     return totalLoss
 
 class tripletLossMetric(mx.metric.EvalMetric):
@@ -115,33 +121,47 @@ class tripletLossMetric(mx.metric.EvalMetric):
         self.sum_metric += np.sum(pred)
         self.num_inst += len(pred)
 
-
+def feature_map(pre_trained,model,test_dataiter):
+    
+    internals = model.get_internals()
+    internals.list_outputs()
+    fea_symbol = internals["qsum_output"]
+    feature_extractor = mx.model.FeedForward(ctx=mx.gpu(), symbol=fea_symbol, 
+                                         arg_params=pre_trained.arg_params,
+                                         aux_params=pre_trained.aux_params,
+                                         allow_extra_params=True)
+    feature_ = feature_extractor.predict(test_dataiter)
+    print(feature_)
+    
+    
 
 class Auc(mx.metric.EvalMetric):
     def __init__(self):
         super(Auc, self).__init__('quantLoss')
 
     def update(self, labels, preds):
-        pred = preds[1].asnumpy().reshape(-1)
+        pred = preds[0].asnumpy().reshape(-1)
         self.sum_metric += np.sum(pred)
         self.num_inst += len(pred)
 
 if __name__ == '__main__':
     batch_size = 128
     hashing_len = 32
+    train_flag = True
     network = get_net(batch_size,hashing_len)
     devs = [mx.gpu(3)]
-    model = mx.model.FeedForward(ctx = devs,
-                                 symbol = network,
-                                 num_epoch = 100,
-                                 learning_rate = 1e-3,
-                                 wd = 0.00001,
-                                 initializer = mx.init.Normal(sigma=0.1),
-                                 momentum = 0.9)#.Xavier(factor_type="in", magnitude=2.34)
+    if train_flag:
+	    model = mx.model.FeedForward(ctx = devs,
+					 symbol = network,
+					 num_epoch = 50,
+					 learning_rate = 1e-3,
+					 wd = 0.00001,
+					 initializer = mx.init.Normal(sigma=1),
+					 momentum = 0.9)#.Xavier(factor_type="in", magnitude=2.34)
+	    eval_metrics = mx.metric.CompositeEvalMetric()
+	    eval_metrics.add(Auc())
+	    eval_metrics.add(tripletLossMetric())
     names = []
-    eval_metrics = mx.metric.CompositeEvalMetric()
-    eval_metrics.add(Auc())
-    eval_metrics.add(tripletLossMetric())
     root = sys.argv[1]
     for fn in os.listdir(root):
         if fn.endswith('.npy'):
@@ -152,11 +172,18 @@ if __name__ == '__main__':
     import logging
     head = '%(asctime)-15s %(message)s'
     logging.basicConfig(level=logging.DEBUG, format=head)
-    
+        
     metric = Auc()
-    model.fit(X = data_train,
-              eval_metric = eval_metrics, 
-              kvstore = 'local_allreduce_device',
-              batch_end_callback=mx.callback.Speedometer(batch_size, 50),)
-    
-    model.save(sys.argv[2])
+    if train_flag:
+	    model.fit(X = data_train,
+		      eval_metric = eval_metrics, 
+		      kvstore = 'local_allreduce_device',
+		      batch_end_callback=mx.callback.Speedometer(batch_size, 50),)
+	    
+	    model.save(sys.argv[2])
+'''
+    else:
+	prefix = "."
+        pre_trained = mx.model.FeedForward.load(prefix, 1, ctx=devs)
+        feature_map(pre_trained,network,data_train)
+'''

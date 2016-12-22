@@ -14,7 +14,8 @@ from sklearn.neighbors import KNeighborsClassifier
 import cv2
 import pdb
 import sys
-from triplet_loss_2 import get_conv
+from inception import  get_inception
+
 #from magnetLoss import *
 def unpickle(file):	
 	fo = open(file, 'rb')
@@ -73,28 +74,20 @@ def KNN_test(data,label,featureExector,splitRatio,n_neighbors,hash_len):
 
 def get_test_net(hash_len):
     anchor = mx.sym.Variable('data')
-    conv_weight = []
-    conv_bias = []
-    for i in range(3):
-        conv_weight.append(mx.sym.Variable('conv' + str(i) + '_weight'))
-        conv_bias.append(mx.sym.Variable('conv' + str(i) + '_bias'))
-    fc_weight = mx.sym.Variable('fc_weight')
-    fc_bias = mx.sym.Variable('fc_bias')
-    cdata =  output = get_conv(anchor, conv_weight, conv_bias, fc_weight, fc_bias)
-    cdata = mx.symbol.FullyConnected(data=cdata, num_hidden=hash_len, name='fc_1')
-    sigmoi  = mx.symbol.Activation(data=cdata,name='sigmoid',act_type='sigmoid')
-    return sigmoi
+
+    cdata= get_inception(concat, hash_len)
+    return cdata
   
 def main():
     prefix = '' 
-    hash_len = 16
+    hash_len = 32
     test_network = get_test_net(hash_len)
     model = mx.model.FeedForward.load(prefix,int(sys.argv[1]), ctx=mx.gpu(3), numpy_batch_size=128)
     feature_extractor = mx.model.FeedForward(ctx=mx.gpu(3), symbol=test_network, numpy_batch_size=128,
                                              arg_params=model.arg_params, aux_params=model.aux_params,
                                              allow_extra_params=True)
 
-    dic=unpickle('/home/chensf/cifar10/test_batch')
+    dic=unpickle('../cifar10/test_batch')
     data = dic['data']
     label = dic['labels']
     score = KNN_test(data,label,feature_extractor,0.2,1,hash_len)

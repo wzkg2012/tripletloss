@@ -47,7 +47,6 @@ def get_inception(data,hash_len):
     in5b = SimpleFactory(in5a, 176, 160)
     pool = mx.symbol.Pooling(data=in5b, pool_type="avg", kernel=(7,7), name="global_avg")
     flatten = mx.symbol.Flatten(data=pool)
-    fc = mx.symbol.FullyConnected(data=flatten, num_hidden=10)
-    fc1 = mx.symbol.FullyConnected(data=fc, num_hidden=hash_len)
-    norm_fc1 = mx.sym.L2Normalization(data =fc1)
-    return norm_fc1
+    fc1 = mx.symbol.FullyConnected(data=flatten, num_hidden=hash_len)
+    #norm_fc1 = mx.sym.L2Normalization(data =fc1)
+    return fc1
