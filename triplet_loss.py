@@ -1,9 +1,10 @@
-
 # pylint: disable=superfluous-parens, no-member, invalid-name
 import sys, random, os
 import mxnet as mx
 import numpy as np
+import cv2
 from operator import itemgetter
+from inception import get_inception_symbol
 
 class Batch(object):
     def __init__(self, data_names, data, label_names, label):
@@ -24,14 +25,15 @@ class DataIter(mx.io.DataIter):
     def __init__(self, names, batch_size):
         super(DataIter, self).__init__()
         self.cache = []
+        size = 224
         for name in names:
             self.cache.append(np.load(name))
         print 'load data ok'
         self.batch_size = batch_size
-        self.provide_data = [('same', (batch_size, 3, 32, 32)), \
-                             ('diff', (batch_size, 3, 32, 32)), \
-                             ('one', (batch_size, ))]
-        self.provide_label = [('anchor', (batch_size, 3, 32, 32))]
+        self.provide_data = [('same', (batch_size, 3, size, size)), \
+                             ('diff', (batch_size, 3, size, size)), \
+                             ('anchor', (batch_size, 3, size, size))]
+        self.provide_label = [('one', (batch_size,))]
         
     def generate_batch(self, n):
         n1, n2 = random.sample(range(len(self.cache)), 2)
@@ -52,16 +54,16 @@ class DataIter(mx.io.DataIter):
         count = 100000 / self.batch_size
         for i in range(count):
             batch = self.generate_batch(self.batch_size)
-            batch_anchor = [x[0] for x in batch]
-            batch_same = [x[1] for x in batch]
-            batch_diff = [x[2] for x in batch]
+            batch_anchor = [x[0]/255.0 for x in batch]
+            batch_same = [x[1]/255.0 for x in batch]
+            batch_diff = [x[2]/255.0 for x in batch]
             batch_one = np.ones(self.batch_size)
                         
             data_all = [mx.nd.array(batch_same), mx.nd.array(batch_diff), \
-                        mx.nd.array(batch_one)]
-            label_all = [mx.nd.array(batch_anchor)]
-            data_names = ['same', 'diff', 'one']
-            label_names = ['anchor']
+                        mx.nd.array(batch_anchor)]
+            label_all = [mx.nd.array(batch_one)]
+            data_names = ['same', 'diff', 'anchor']
+            label_names = ['one']
             
             data_batch = Batch(data_names, data_all, label_names, label_all)
             yield data_batch
@@ -69,55 +71,20 @@ class DataIter(mx.io.DataIter):
     def reset(self):
         pass
 
-def get_conv(data, conv_weight, conv_bias, fc_weight, fc_bias,hash_len=16):
-    cdata = data
-    ks = [5, 3, 3]
-    for i in range(3):
-        cdata = mx.sym.Convolution(data=cdata, kernel=(ks[i],ks[i]), num_filter=32,
-                                   weight = conv_weight[i], bias = conv_bias[i],
-                                   name = 'conv' + str(i))
-        cdata = mx.sym.Pooling(data=cdata, pool_type="avg", kernel=(2,2), stride=(1, 1))
-        cdata = mx.sym.Activation(data=cdata, act_type="relu")
-
-    cdata = mx.sym.Flatten(data = cdata)
-    cdata = mx.sym.FullyConnected(data = cdata, num_hidden = 1024,
-                                  weight = fc_weight, bias = fc_bias, name='fc')
-    cdata = mx.sym.L2Normalization(data = cdata)
-    return cdata
-
-def get_sim_net():
-    same = mx.sym.Variable('same')
-    diff = mx.sym.Variable('diff')
-    conv_weight = []
-    conv_bias = []
-    for i in range(3):
-        conv_weight.append(mx.sym.Variable('conv' + str(i) + '_weight'))
-        conv_bias.append(mx.sym.Variable('conv' + str(i) + '_bias'))
-    fc_weight = mx.sym.Variable('fc_weight')
-    fc_bias = mx.sym.Variable('fc_bias')
-    fs = get_conv(same, conv_weight, conv_bias, fc_weight, fc_bias)
-    fd = get_conv(diff, conv_weight, conv_bias, fc_weight, fc_bias)
-    fs = fs - fd
-    fs = fs * fs
-    return mx.sym.sum(fs, axis = 1)
 
 
-def get_net(batch_size=128,hash_len=16):
+def get_net(batch_size=128,hash_len=32):
     same = mx.sym.Variable('same')
     diff = mx.sym.Variable('diff')
     anchor = mx.sym.Variable('anchor')
     one = mx.sym.Variable('one')
     one = mx.sym.Reshape(data = one, shape = (-1, 1))
-    conv_weight = []
-    conv_bias = []
     concat = mx.symbol.Concat(*[same, diff, anchor], dim=0, name='concat')
-    for i in range(3):
-        conv_weight.append(mx.sym.Variable('conv' + str(i) + '_weight'))
-        conv_bias.append(mx.sym.Variable('conv' + str(i) + '_bias'))
-    fc_weight = mx.sym.Variable('fc_weight')
-    fc_bias = mx.sym.Variable('fc_bias')
+    output = get_inception_symbol(concat, hash_len)
+    output = mx.symbol.FullyConnected(data=output, \
+                                  num_hidden=hash_len, name='fc')
+    output = mx.sym.L2Normalization(data=output,name = 'bn_fc')
     
-    output = get_conv(concat, conv_weight, conv_bias, fc_weight, fc_bias,hash_len=16)
     '''
     fs = get_conv(same, conv_weight, conv_bias, fc_weight, fc_bias)
     fd = get_conv(diff, conv_weight, conv_bias, fc_weight, fc_bias)
@@ -146,14 +113,14 @@ class Auc(mx.metric.EvalMetric):
         self.num_inst += len(pred)
 
 if __name__ == '__main__':
-    batch_size = 128
-    hashing_len = 16
+    batch_size = 32
+    hashing_len = 32
     network = get_net(batch_size,hashing_len)
-    devs = [mx.gpu(2)]
-    pre_trained = mx.model.FeedForward.load('',100)
+    devs = [mx.gpu(0)]
+    pre_trained = mx.model.FeedForward.load('Inception-BN',126)
     model = mx.model.FeedForward(ctx = devs,
                                  symbol = network,
-                                 num_epoch = 100,
+                                 num_epoch = 20,
                                  learning_rate = 0.01,
                                  wd = 0.00001,
                                  initializer = mx.init.Xavier(factor_type="in", magnitude=2.34),

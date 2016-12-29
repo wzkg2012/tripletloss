@@ -111,6 +111,6 @@ def get_inception_symbol(data,hash_len):
     # global avg pooling
     pool = mx.symbol.Pooling(data=in5b, kernel=(7, 7), stride=(1, 1), name="global_pool", pool_type='avg')
 
-    flatten = mx.symbol.Flatten(data=pool)
+    flatten = mx.symbol.Flatten(data=pool,name='flatten')
 
     return flatten

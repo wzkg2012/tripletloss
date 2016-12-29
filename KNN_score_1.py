@@ -14,7 +14,7 @@ from sklearn.neighbors import KNeighborsClassifier
 import cv2
 import pdb
 import sys
-from inception import  get_inception
+from inception import  get_inception_symbol
 
 #from magnetLoss import *
 def unpickle(file):	
@@ -25,16 +25,17 @@ def unpickle(file):
 def provideBatch(data,batchSize=128):
     nRound = len(data)/batchSize
     nSample = len(data)
+    size = 224
     for start in range(nRound+1):
-        batch = np.zeros((batchSize,3,32,32))
+        batch = np.zeros((batchSize,3,size,size))
         for i in range(batchSize) :
             ii=start*batchSize+i
             if ii<nSample:
                 img = data[ii]
                 img = img.reshape(32,32,3,order='F')
                 #img = cv2.resize(img,(224,224))
-
                 img=img.swapaxes(2,0)
+                img = cv2.resize(img[:,:,0],dsize=(size, size), interpolation=cv2.INTER_CUBIC)
                 batch[i]=img
         yield batch
         
@@ -74,23 +75,26 @@ def KNN_test(data,label,featureExector,splitRatio,n_neighbors,hash_len):
 
 def get_test_net(hash_len):
     anchor = mx.sym.Variable('data')
-
-    cdata= get_inception(concat, hash_len)
-    return cdata
+    
+    cdata= get_inception_symbol(anchor, hash_len)
+    output = mx.symbol.FullyConnected(data=cdata, \
+                                  num_hidden=hash_len, name='fc')
+   # output = mx.sym.L2Normalization(data=output,name = 'bn_fc')
+    return output
   
 def main():
-    prefix = '' 
+    prefix = 'triplet' 
     hash_len = 32
     test_network = get_test_net(hash_len)
-    model = mx.model.FeedForward.load(prefix,int(sys.argv[1]), ctx=mx.gpu(3), numpy_batch_size=128)
-    feature_extractor = mx.model.FeedForward(ctx=mx.gpu(3), symbol=test_network, numpy_batch_size=128,
+    model = mx.model.FeedForward.load(prefix,int(sys.argv[1]), ctx=mx.gpu(0))
+    feature_extractor = mx.model.FeedForward(ctx=mx.gpu(0), symbol=test_network, numpy_batch_size=32,
                                              arg_params=model.arg_params, aux_params=model.aux_params,
                                              allow_extra_params=True)
 
     dic=unpickle('../cifar10/test_batch')
     data = dic['data']
     label = dic['labels']
-    score = KNN_test(data,label,feature_extractor,0.2,1,hash_len)
+    score = KNN_test(data,label,feature_extractor,0.2,5,hash_len)
     print score
 if __name__ == '__main__':
 	main()

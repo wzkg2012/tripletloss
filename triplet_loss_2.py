@@ -55,9 +55,9 @@ class DataIter(mx.io.DataIter):
         count = 100000 / self.batch_size
         for i in range(count):
             batch = self.generate_batch(self.batch_size)
-            batch_anchor = [x[0] for x in batch]
-            batch_same = [x[1] for x in batch]
-            batch_diff = [x[2] for x in batch]
+            batch_anchor = [x[0]/255.0 for x in batch]
+            batch_same = [x[1]/255.0 for x in batch]
+            batch_diff = [x[2]/255.0 for x in batch]
             batch_one = np.ones(self.batch_size)
 
             data_all = [mx.nd.array(batch_same), mx.nd.array(batch_diff), mx.nd.array(batch_anchor)]
@@ -72,7 +72,7 @@ class DataIter(mx.io.DataIter):
         pass
 
 
-def get_net(batch_size=128, hash_len=100, scale=0.1, alpha=1):
+def get_net(batch_size=128, hash_len=32, scale=1, alpha=1):
     same = mx.sym.Variable('same')
     diff = mx.sym.Variable('diff')
     anchor = mx.sym.Variable('anchor')
@@ -83,7 +83,7 @@ def get_net(batch_size=128, hash_len=100, scale=0.1, alpha=1):
     output = get_inception_symbol(concat, hash_len)
     output = mx.symbol.FullyConnected(data=output, \
                                   num_hidden=hash_len, name='fc')
-    output = mx.sym.L2Normalization(data=output,name = 'bn_fc')
+    output = mx.sym.L2Normalization(data=output,name = 'bn_fc') 
     # triplet loss
     fc1_fs = mx.symbol.slice_axis(output, axis=0, begin=0, end=batch_size, name='fc1_fs')
     fc1_fd = mx.symbol.slice_axis(output, axis=0, begin=batch_size, end=2 * batch_size, name='fc1_fd')
@@ -92,25 +92,27 @@ def get_net(batch_size=128, hash_len=100, scale=0.1, alpha=1):
     theta_as = mx.symbol.dot(lhs=sigmoid_fa.transpose(0,1),rhs=sigmoid_fs)
     theta_ad = mx.symbol.dot(lhs=sigmoid_fa.transpose(0,1),rhs=sigmoid_fd)
    '''
+    
     quantLoss = mx.symbol.sign(data=output, name='sign') - output
     quantLoss = mx.symbol.square(data=quantLoss, name='square')
     quantLoss1 = mx.symbol.sum(data=quantLoss, axis=1, name='qsum')
     # quantLoss =mx.symbol.sqrt(data = quantLoss,name = 'quantLoss_')
     quantLoss = quantLoss1 * scale
+    #quantLoss = mx.symbol.sum(data=output,axis=1,name='output')
     quantLoss = mx.symbol.MakeLoss(data=quantLoss, name='quantLoss')
 
     theta_as = 0.5 * fc1_fa * fc1_fs
     theta_ad = 0.5 * fc1_fa * fc1_fd
     theta_as = mx.sym.sum(data=theta_as, axis=(1), keepdims=1)
     theta_ad = mx.sym.sum(data=theta_ad, axis=(1), keepdims=1)
-    # tripletLoss1 = theta_ad-theta_as-one
-    # tripletLoss1 = mx.symbol.MakeLoss(data=tripletLoss1, name="tripelt_hash_loss")
+    #tripletLoss1 = theta_ad-theta_as-one
+    #tripletLoss1 = mx.symbol.MakeLoss(data=output, name="tripelt_hash_loss")
 
 
     tripletLoss = -(theta_as - theta_ad - one - mx.symbol.log(1 + mx.symbol.exp(theta_as - theta_ad - one)))
-    tripletLoss = mx.symbol.MakeLoss(data=tripletLoss, name="tripelt_hash_loss")
+    tripletLoss = mx.symbol.MakeLoss(data=tripletLoss, name="triplet_hash_loss")
 
-    totalLoss = mx.sym.Group([tripletLoss, quantLoss])
+    totalLoss = mx.sym.Group([tripletLoss,quantLoss])
     return totalLoss
 
 
@@ -137,18 +139,17 @@ class Auc(mx.metric.EvalMetric):
 
 
 if __name__ == '__main__':
-    batch_size = 32
+    batch_size = 16
     hashing_len = 32
-    train_flag = True
     network = get_net(batch_size, hashing_len)
     devs = [mx.gpu(3)]
-    pre_trained = mx.model.FeedForward.load('Inception-BN',126)
+    pre_trained = mx.model.FeedForward.load('triplet',10)
     model = mx.model.FeedForward(ctx=devs,
                                      symbol=network,
-                                     num_epoch=50,
-                                     learning_rate=1e-3,
+                                     num_epoch=20,
+                                     learning_rate=1e-4,
                                      wd=0.00001,
-                                     initializer=mx.init.Normal(sigma=1),
+                                     initializer=mx.init.Normal(sigma=0.001),
 				     arg_params=pre_trained.arg_params, aux_params=pre_trained.aux_params,
                                      momentum=0.9)  # .Xavier(factor_type="in", magnitude=2.34)
     eval_metrics = mx.metric.CompositeEvalMetric()
@@ -169,7 +170,9 @@ if __name__ == '__main__':
 
     metric = Auc()
     model.fit(X=data_train,
-                  eval_metric=eval_metrics)
+                  eval_metric=eval_metrics,
+		kvstore = 'local_allreduce_device',
+              batch_end_callback=mx.callback.Speedometer(batch_size, 50),)
     model.save(sys.argv[2])
 '''
     else:
